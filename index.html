@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>攝氧量即時計算器</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1c2430;--muted:#667085;--line:#d9dee6;--accent:#0f766e;--accentbg:#e3f4f1;--warn:#b45309;color-scheme:light dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12171d;--card:#1b222b;--text:#e8ecf1;--muted:#98a2b3;--line:#2e3846;--accent:#4fd1c0;--accentbg:#16342f;--warn:#f6ad55}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;line-height:1.5}
+main{max-width:640px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.35rem;margin:0 0 4px}
+.sub{color:var(--muted);font-size:.9rem;margin:0 0 16px}
+.tabs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+@media(min-width:520px){.tabs{grid-template-columns:repeat(4,1fr)}}
+.tab{padding:10px 6px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;font-size:.95rem;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.formula{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;background:var(--accentbg);padding:8px 10px;border-radius:8px;margin-bottom:14px;overflow-x:auto;white-space:nowrap}
+.row{display:flex;gap:8px;margin-bottom:12px;align-items:flex-end}
+.field{flex:1;min-width:0}
+label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
+input,select{width:100%;padding:10px;font-size:1rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.unit{flex:0 0 38%}
+.results{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.res{background:var(--accentbg);border-radius:12px;padding:12px}
+.res.big{grid-column:1/-1}
+.res .k{font-size:.8rem;color:var(--muted)}
+.res .v{font-size:1.8rem;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.res:not(.big) .v{font-size:1.3rem}
+.res .u{font-size:.8rem;color:var(--muted);margin-left:4px;font-weight:400}
+.note{font-size:.82rem;color:var(--muted)}
+.warn{color:var(--warn);font-size:.85rem;min-height:1.2em;margin-top:4px}
+</style>
+</head>
+<body>
+<main>
+<h1>攝氧量（VO₂）即時計算器</h1>
+<p class="sub">輸入數值後即時計算 Gross VO₂ 與 METs。</p>
+
+<div class="tabs" role="tablist" id="tabs"></div>
+
+<div class="card">
+  <div class="formula" id="formula"></div>
+  <div id="inputs"></div>
+  <div class="warn" id="warn"></div>
+</div>
+
+<div class="results">
+  <div class="res big"><div class="k">Gross VO₂</div><div><span class="v" id="vo2">—</span><span class="u">mL·kg⁻¹·min⁻¹</span></div></div>
+  <div class="res big"><div class="k">METs</div><div><span class="v" id="met">—</span></div></div>
+</div>
+
+<div class="card" style="margin-top:14px">
+<p class="note" style="margin:0">說明：坡度以百分比輸入（內部換算為小數）。行走公式適用速度約 50–100 m/min（3.0–6.0 km/h），跑步公式適用 &gt;134 m/min（&gt;8.0 km/h），若確實為慢跑，約 4.8 km/h 以上亦可使用；功率最準確範圍：下肢 50–200 W、上肢 25–125 W。METs = VO₂ ÷ 3.5。本工具僅供臨床與研究參考。</p>
+</div>
+</main>
+
+<script>
+const MODES = {
+  walk:{name:'行走',formula:'VO₂ = 3.5 + 0.1×速度 + 1.8×速度×坡度',type:'tread',a:0.1,b:1.8},
+  run:{name:'跑步',formula:'VO₂ = 3.5 + 0.2×速度 + 0.9×速度×坡度',type:'tread',a:0.2,b:0.9},
+  leg:{name:'下肢肌功器',formula:'VO₂ = 7 + 1.8×功率 ÷ 體重',type:'erg',c:7,k:1.8},
+  arm:{name:'上肢手搖車',formula:'VO₂ = 3.5 + 3×功率 ÷ 體重',type:'erg',c:3.5,k:3}
+};
+let mode='walk';
+const $=id=>document.getElementById(id);
+const tabs=$('tabs');
+Object.keys(MODES).forEach(k=>{
+  const b=document.createElement('button');
+  b.className='tab';b.role='tab';b.textContent=MODES[k].name;b.dataset.k=k;
+  b.onclick=()=>{mode=k;render();};
+  tabs.appendChild(b);
+});
+
+function render(){
+  const wv=$('wt')?$('wt').value:'';
+  const m=MODES[mode];
+  [...tabs.children].forEach(b=>b.setAttribute('aria-selected',b.dataset.k===mode));
+  $('formula').textContent=m.formula;
+  if(m.type==='tread'){
+    $('inputs').innerHTML=`
+    <div class="row">
+      <div class="field"><label for="spd">速度</label><input id="spd" type="number" inputmode="decimal" min="0" step="any" placeholder="例如 5"></div>
+      <div class="field unit"><label for="spdu">單位</label><select id="spdu"><option value="16.6667">km/h</option><option value="1">m/min</option><option value="26.8224">mph</option></select></div>
+    </div>
+    <div class="field" style="margin-bottom:12px"><label for="gr">坡度（%）</label><input id="gr" type="number" inputmode="decimal" min="0" step="any" value="0"></div>`;
+  }else{
+    $('inputs').innerHTML=`
+    <div class="row">
+      <div class="field"><label for="pw">功率</label><input id="pw" type="number" inputmode="decimal" min="0" step="any" placeholder="例如 50"></div>
+      <div class="field unit"><label for="pwu">單位</label><select id="pwu"><option value="6.1182">Watts</option><option value="1">kg·m/min</option></select></div>
+    </div>
+    <div class="field" style="margin-bottom:6px"><label for="wt">體重（kg）</label><input id="wt" type="number" inputmode="decimal" min="0" step="0.1" placeholder="例如 65" value="${wv}"></div>`;
+  }
+  $('inputs').querySelectorAll('input,select').forEach(e=>e.addEventListener('input',calc));
+  calc();
+}
+
+function num(id){const e=$(id);if(!e||e.value==='')return NaN;return parseFloat(e.value);}
+function show(id,v,d){$(id).textContent=isFinite(v)?v.toFixed(d):'—';}
+
+function calc(){
+  const m=MODES[mode];const w=num('wt');let vo2=NaN,warn='';
+  if(m.type==='tread'){
+    const s=num('spd')*parseFloat($('spdu').value);
+    const g=(isNaN(num('gr'))?0:num('gr'))/100;
+    if(isFinite(s)&&s>=0){
+      vo2=3.5+m.a*s+m.b*s*g;
+      if(mode==='walk'&&(s<50||s>100))warn='提醒：速度超出行走公式適用範圍（50–100 m/min，即 3.0–6.0 km/h）。';
+      if(mode==='run'&&s<80.4)warn='提醒：速度低於跑步公式的慢跑下限（約 4.8 km/h）。';
+      else if(mode==='run'&&s<134)warn='提醒：4.8–8.0 km/h 請確認受測者為慢跑步態（行走請改用行走公式）。';
+    }
+  }else{
+    const p=num('pw')*parseFloat($('pwu').value);
+    if(isFinite(p)&&p>=0){
+      if(!(w>0)){warn='請輸入體重以計算功率相關攝氧量。';}
+      else{
+        vo2=m.c+m.k*p/w;
+        if(mode==='leg'&&(p<300||p>1200))warn='提醒：功率超出下肢公式最準確範圍（50–200 W）。';
+        if(mode==='arm'&&(p<150||p>750))warn='提醒：功率超出上肢公式最準確範圍（25–125 W）。';
+      }
+    }
+  }
+  show('vo2',vo2,1);
+  show('met',vo2/3.5,1);
+  $('warn').textContent=warn;
+}
+render();
+</script>
+</body>
+</html>
